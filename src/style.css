@@ -148,6 +148,37 @@ body {
   border-color: #cbd5e1;
 }
 
+.btn-demo {
+  padding: 10px 14px;
+  border: 2px solid #8b5cf6;
+  border-radius: 10px;
+  font-size: 13px;
+  font-weight: 700;
+  cursor: pointer;
+  background: linear-gradient(135deg, #8b5cf6, #7c3aed);
+  color: white;
+  transition: all 0.15s;
+}
+
+.btn-demo:hover:not(:disabled) {
+  background: linear-gradient(135deg, #7c3aed, #6d28d9);
+  border-color: #6d28d9;
+}
+
+.btn-demo:disabled {
+  opacity: 0.6;
+  cursor: not-allowed;
+}
+
+.btn-demo.running {
+  animation: demo-pulse 1.5s ease-in-out infinite;
+}
+
+@keyframes demo-pulse {
+  0%, 100% { opacity: 1; }
+  50% { opacity: 0.7; }
+}
+
 /* ── 信息框 ── */
 .result-box,
 .history-box,

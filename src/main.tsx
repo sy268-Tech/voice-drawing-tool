@@ -310,6 +310,62 @@ function App() {
 
   const speech = useSpeechRecognition(handleInput);
 
+  /* ── 自动演示模式 ── */
+  const [demoRunning, setDemoRunning] = useState(false);
+
+  const runDemo = useCallback(async () => {
+    setDemoRunning(true);
+    setShapes([]);
+    setHistory([]);
+
+    const narrate = (text: string): Promise<void> =>
+      new Promise((resolve) => {
+        const u = new SpeechSynthesisUtterance(text);
+        u.lang = "zh-CN";
+        u.rate = 0.95;
+        u.onend = () => resolve();
+        u.onerror = () => resolve();
+        speechSynthesis.cancel();
+        speechSynthesis.speak(u);
+      });
+
+    const step = async (cmd: string, narration: string) => {
+      setLog(`🎬 ${narration}`);
+      await narrate(narration);
+      await new Promise((r) => setTimeout(r, 400));
+      handleInput(cmd);
+      await new Promise((r) => setTimeout(r, 800));
+    };
+
+    await narrate("欢迎观看语音绘图工具演示。我将展示十三种图形和七种编辑操作。");
+
+    await step("画一个红色圆形", "画一个红色圆形");
+    await step("在左上角画一个大的蓝色矩形", "在左上角画一个大的蓝色矩形");
+    await step("画一个绿色三角形", "画一个绿色三角形");
+    await step("画一个黄色五角星", "画一个黄色五角星");
+    await step("画一个粉色爱心", "画一个粉色爱心");
+    await step("画一个红色箭头", "画一个红色箭头");
+    await step("画一个蓝色菱形", "画一个蓝色菱形");
+    await step("画一条弧形", "画一条弧线");
+    await step("画一个紫色六边形", "画一个紫色六边形");
+    await step("画一个白色云朵", "画一个白色云朵");
+    await step("写 语音绘图", "写上文字：语音绘图");
+
+    await narrate("接下来展示编辑操作");
+    await step("把圆形移到右边", "把圆形移到右边");
+    await step("将矩形改为紫色", "将矩形改为紫色");
+    await step("把圆放大", "把圆形放大");
+    await step("删掉三角形", "删除三角形");
+    await step("撤销", "撤销，恢复三角形");
+
+    await narrate("最后清空画布，演示完成！");
+    await step("清空", "清空画布");
+
+    await narrate("感谢观看！语音绘图工具，说出指令即刻绘图，零依赖，纯本地运行。");
+    setLog("🎬 演示完成！说出指令开始绘图");
+    setDemoRunning(false);
+  }, [handleInput]);
+
   return (
     <main className="app">
       {/* 左侧控制面板 */}
@@ -321,8 +377,9 @@ function App() {
         <button
           className={speech.listening ? "btn-mic listening" : "btn-mic"}
           onClick={speech.listening ? speech.stopListening : speech.startListening}
+          disabled={demoRunning}
         >
-          {speech.listening ? "🔴 正在聆听..." : "🎤 点击说话"}
+          {speech.listening ? "🔴 正在聆听..." : demoRunning ? "🎬 演示中" : "🎤 点击说话"}
         </button>
 
         {/* 文本输入 */}
@@ -355,8 +412,15 @@ function App() {
 
         {/* 快捷操作 */}
         <div className="actions">
-          <button className="btn-secondary" onClick={() => handleInput("撤销")}>↩ 撤销</button>
-          <button className="btn-secondary" onClick={() => handleInput("清空")}>🗑 清空</button>
+          <button className="btn-secondary" onClick={() => handleInput("撤销")} disabled={demoRunning}>↩ 撤销</button>
+          <button className="btn-secondary" onClick={() => handleInput("清空")} disabled={demoRunning}>🗑 清空</button>
+          <button
+            className={demoRunning ? "btn-demo running" : "btn-demo"}
+            onClick={runDemo}
+            disabled={demoRunning}
+          >
+            {demoRunning ? "⏳ 演示中..." : "🎬 自动演示"}
+          </button>
         </div>
 
         {/* 识别结果 */}
