@@ -20,7 +20,9 @@ export type Action =
   | "move"
   | "resize"
   | "recolor"
+  | "rotate"
   | "undo"
+  | "redo"
   | "clear"
   | "delete";
 
@@ -32,6 +34,8 @@ export type Drawable = {
   width: number;
   height: number;
   color: string;
+  /** 旋转角度（度） */
+  rotation?: number;
   text?: string;
   /** 线条终点 */
   x2?: number;
@@ -46,4 +50,10 @@ export type Command = {
   size?: string;
   text?: string;
   ordinal?: number;
+  /** 一次画几个，如「画三个圆」/ "draw 3 circles" */
+  count?: number;
+  /** 旋转角度（度），默认 45 */
+  degrees?: number;
 };
+
+export type Lang = "zh-CN" | "en-US";
