@@ -4,8 +4,8 @@ import "./style.css";
 
 /* ── types ─────────────────────────────────────────────── */
 
-type ShapeType = "circle" | "rect" | "line" | "text" | "sun" | "tree" | "grass" | "sky";
-type Action = "draw" | "move" | "resize" | "undo" | "clear" | "delete";
+type ShapeType = "circle" | "rect" | "line" | "text" | "sun" | "tree" | "grass" | "sky" | "dot";
+type Action = "draw" | "move" | "resize" | "recolor" | "extend" | "undo" | "clear" | "delete";
 
 type Drawable = {
   id: string;
@@ -16,6 +16,8 @@ type Drawable = {
   height: number;
   color: string;
   text?: string;
+  x2?: number;  /* 线条终点 x */
+  y2?: number;  /* 线条终点 y */
 };
 
 type Command = {
@@ -26,6 +28,11 @@ type Command = {
   size?: string;
   text?: string;
   target?: string;
+  direction?: string;   /* "left"|"right"|"up"|"down"|"up-left"|"up-right"|"down-left"|"down-right" */
+  useRef?: boolean;      /* true = 以上一个图形的位置为基准 */
+  useLineRadius?: boolean; /* true = 以上一条线的长度为半径画圆 */
+  ordinal?: number;      /* 正数=第N个, -1=最后一个, -2=倒数第二个 */
+  length?: number;       /* 指定线条/延伸的长度（像素） */
   /* LLM 可直接输出精确坐标，此时优先使用 */
   x?: number;
   y?: number;
@@ -109,6 +116,7 @@ const SYSTEM_PROMPT = `你是一个语音绘图指令解析器。根据用户的
 | text   | 文字 |
 | sun    | 太阳（圆形，默认黄色） |
 | tree   | 树（圆形树冠 + 棕色树干） |
+| dot    | 点（实心小圆点，半径6px） |
 | sky    | 天空背景（横跨顶部的矩形） |
 | grass  | 草地背景（横跨底部的矩形） |
 
@@ -117,8 +125,10 @@ const SYSTEM_PROMPT = `你是一个语音绘图指令解析器。根据用户的
 |--------|------|
 | draw   | 绘制新图形 |
 | move   | 移动已有图形（需指定 shape 来定位目标） |
-| resize | 缩放已有图形（需指定 shape） |
-| delete | 删除已有图形（需指定 shape） |
+| resize  | 缩放已有图形（需指定 shape） |
+| recolor | 修改图形颜色（需指定 shape 和 color） |
+| extend  | 从上一个图形向指定方向延伸一条线（需 direction） |
+| delete  | 删除已有图形（需指定 shape） |
 | undo   | 撤销上一步 |
 | clear  | 清空整个画布 |
 
@@ -135,6 +145,10 @@ const SYSTEM_PROMPT = `你是一个语音绘图指令解析器。根据用户的
 | 左侧 | 160 | 280 |
 | 右侧 | 740 | 280 |
 
+## 方向 (direction)
+左:left  右:right  上:up  下:down
+左上:up-left  右上:up-right  左下:down-left  右下:down-right
+
 ## 默认大小
 - 普通：width=110, height=110
 - 小：width=70, height=70
@@ -150,9 +164,13 @@ const SYSTEM_PROMPT = `你是一个语音绘图指令解析器。根据用户的
 黑色:#111827  白色:#ffffff  紫色:#a855f7  橙色:#f97316
 天空默认:#93c5fd  草地默认:#22c55e  树默认:#16a34a
 
+## 序号定位 (ordinal)
+用 ordinal 指定第几个匹配图形：1=第一个, 2=第二个, -1=最后一个(默认)
+例如删除第一个圆：action:"delete", shape:"circle", ordinal:1
+
 ## 输出格式
 只输出纯 JSON 数组，不要包含 \`\`\`json 标记，不要任何解释文字。
-每个命令对象字段：action, shape(仅 draw/move/resize/delete 需要), x, y, width, height, color(可选), text(仅 text 类型需要)
+每个命令对象字段：action, shape(仅 draw/move/resize/delete/recolor 需要), ordinal(可选), x, y, width, height, color(可选), text(仅 text 类型需要)
 
 ## 示例
 用户："画一个红色圆形"
@@ -172,6 +190,33 @@ const SYSTEM_PROMPT = `你是一个语音绘图指令解析器。根据用户的
 
 用户："把圆形放大"
 → [{"action":"resize","shape":"circle","size":"大"}]
+
+用户："将蓝色的圆改为黄色"
+→ [{"action":"recolor","shape":"circle","color":"#facc15"}]
+
+用户："把太阳的颜色改成红色"
+→ [{"action":"recolor","shape":"sun","color":"#ef4444"}]
+
+用户："在中间画一个点"
+→ [{"action":"draw","shape":"dot","x":450,"y":280,"color":"#111827"}]
+
+用户："从这个点向右延伸一条线"
+→ [{"action":"extend","direction":"right","color":"#111827"}]
+
+用户："以这个点为圆心画一个红色圆形"
+→ [{"action":"draw","shape":"circle","color":"#ef4444","useRef":true}]
+
+用户："画一条长度200的线"
+→ [{"action":"draw","shape":"line","x":450,"y":280,"length":200,"color":"#111827"}]
+
+用户："从点向右延伸150像素"
+→ [{"action":"extend","direction":"right","length":150}]
+
+用户："以这条线为半径画一个红色圆"
+→ [{"action":"draw","shape":"circle","color":"#ef4444","useLineRadius":true}]
+
+用户："画一条100像素的线，然后以这条线为半径画圆"
+→ [{"action":"draw","shape":"line","x":450,"y":280,"length":100,"color":"#111827"},{"action":"draw","shape":"circle","color":"#3b82f6","useLineRadius":true}]
 
 用户："画一只猫"
 → 尽量用已有图形近似，例如用圆形和文字组合。实在无法处理的返回 [{"action":"draw","shape":"text","x":450,"y":280,"width":110,"height":110,"color":"#111827","text":"🐱"}]。
@@ -230,30 +275,140 @@ function defaultColor(type: ShapeType) {
   if (type === "tree") return "#16a34a";
   if (type === "grass") return "#22c55e";
   if (type === "sky") return "#93c5fd";
+  if (type === "dot") return "#111827";
   return "#3b82f6";
 }
 
 /* ── local parser ──────────────────────────────────────── */
 
-function parseOneCommand(input: string): Command {
+function parseOrdinal(input: string): number | undefined {
+  if (input.includes("第一个")) return 1;
+  if (input.includes("第二个")) return 2;
+  if (input.includes("第三个")) return 3;
+  if (input.includes("第四个")) return 4;
+  if (input.includes("第五个")) return 5;
+  if (input.includes("最后一个") || input.includes("刚才的") || input.includes("刚才那个") || input.includes("上一个")) return -1;
+  if (input.includes("倒数第二个")) return -2;
+  return undefined;
+}
+
+function parseLength(input: string): number | undefined {
+  /* "100像素" / "100px" */
+  const m1 = input.match(/(\d+)\s*(?:像素|px)/);
+  if (m1) return Number(m1[1]);
+  /* "长度为100" / "长度100" / "长100" / "线长250" */
+  const m2 = input.match(/(?:长度|长为?|长|线长)\s*(\d+)/);
+  if (m2) return Number(m2[1]);
+  /* "延伸200" / "延伸 200" / "延伸150" */
+  const m3 = input.match(/延伸\s*(\d+)/);
+  if (m3) return Number(m3[1]);
+  /* "一条200的线" / "一条300的直线" */
+  const m4 = input.match(/(\d+)\s*(?:的线|的直线)/);
+  if (m4) return Number(m4[1]);
+  return undefined;
+}
+
+function getLineLength(line: Drawable): number {
+  const x2 = line.x2 ?? line.x + line.width;
+  const y2 = line.y2 ?? line.y;
+  return Math.round(Math.sqrt((x2 - line.x) ** 2 + (y2 - line.y) ** 2));
+}
+
+function parseDirection(input: string): string | undefined {
+  if (input.includes("左下")) return "down-left";
+  if (input.includes("左上")) return "up-left";
+  if (input.includes("右下")) return "down-right";
+  if (input.includes("右上")) return "up-right";
+  if (input.includes("左")) return "left";
+  if (input.includes("右")) return "right";
+  if (input.includes("上")) return "up";
+  if (input.includes("下")) return "down";
+  return undefined;
+}
+
+function parseShape(input: string): ShapeType | undefined {
+  if (input.includes("太阳")) return "sun";
+  if (input.includes("圆")) return "circle";
+  if (input.includes("矩形") || input.includes("方形") || input.includes("正方形")) return "rect";
+  if (input.includes("线")) return "line";
+  if (input.includes("点")) return "dot";
+  if (input.includes("树")) return "tree";
+  if (input.includes("草地")) return "grass";
+  if (input.includes("天空")) return "sky";
+  if (input.includes("文字") || input.includes("写")) return "text";
+  return undefined;
+}
+
+function parseOneCommand(input: string): Command | null {
   if (input.includes("撤销") || input.includes("返回上一步")) return { action: "undo" };
   if (input.includes("清空") || input.includes("擦掉全部")) return { action: "clear" };
-  if (input.includes("删除") || input.includes("去掉")) return { action: "delete" };
+  if (input.includes("删除") || input.includes("删掉") || input.includes("去掉") || input.includes("移除")) {
+    const shape = parseShape(input);
+    return { action: "delete", shape, ordinal: parseOrdinal(input), color: getColor(input) };
+  }
+
+  /* ---- 延伸线：从[这个/那个]点向[方向]画/延伸线 ---- */
+  const isExtend =
+    (input.includes("延伸") || input.includes("向") && input.includes("画") && input.includes("线")) &&
+    !input.includes("移动") && !input.includes("放大") && !input.includes("缩小");
+  if (isExtend) {
+    const dir = parseDirection(input);
+    const len = parseLength(input);
+    if (dir) return { action: "extend", direction: dir, length: len, color: getColor(input) };
+    /* 没有明确方向但提到了"向...画线"，尝试作为普通线处理 */
+    if (input.includes("线")) {
+      return { action: "draw", shape: "line", color: getColor(input), position: input, size: input, length: len };
+    }
+  }
+
+  /* ---- 画点 ---- */
+  if ((input.includes("点") && (input.includes("画") || input.includes("标记") || input.includes("标"))) &&
+      !input.includes("圆心") && !input.includes("中心")) {
+    return { action: "draw", shape: "dot", color: getColor(input), position: input };
+  }
+
+  /* 检测改色指令：将X改为Y / 改成 / 换成 / 变成 / 改颜色 / X色改为Y色 */
+  const isRecolor =
+    (input.includes("改为") || input.includes("改成") || input.includes("换成") ||
+     input.includes("变成") || input.includes("颜色")) &&
+    !input.includes("移动") && !input.includes("移到") && !input.includes("放大") &&
+    !input.includes("缩小") && !input.includes("变大") && !input.includes("变小");
+
+  if (isRecolor) {
+    const shape = parseShape(input);
+    /* 取"改为/改成/换成/变成"之后的部分来提取新颜色 */
+    const verbs = ["改为", "改成", "换成", "变成"];
+    let newColorInput = input;
+    for (const v of verbs) {
+      const idx = input.indexOf(v);
+      if (idx >= 0) { newColorInput = input.slice(idx + v.length); break; }
+    }
+    const newColor = getColor(newColorInput) ?? getColor(input);
+    return { action: "recolor", shape, color: newColor, ordinal: parseOrdinal(input), target: input };
+  }
+
+  /* 以这条线为半径画圆 */
+  if (input.includes("线") && (input.includes("为半径") || input.includes("作为半径")) && (input.includes("圆") || input.includes("画"))) {
+    return { action: "draw", shape: "circle", color: getColor(input), useLineRadius: true, size: input };
+  }
+
+  /* 以某个点为圆心/中心画圆 */
+  if (input.includes("圆心") || input.includes("为中心") || input.includes("为中心点")) {
+    return { action: "draw", shape: "circle", color: getColor(input), useRef: true, size: input };
+  }
 
   const isMove = input.includes("移动") || input.includes("移到") || input.includes("放到");
   const isResize = input.includes("变大") || input.includes("放大") || input.includes("变小") || input.includes("缩小");
 
-  let shape: ShapeType | undefined;
-  if (input.includes("圆") || input.includes("太阳")) shape = input.includes("太阳") ? "sun" : "circle";
-  else if (input.includes("矩形") || input.includes("方形") || input.includes("正方形")) shape = "rect";
-  else if (input.includes("线")) shape = "line";
-  else if (input.includes("文字") || input.includes("写")) shape = "text";
-  else if (input.includes("树")) shape = "tree";
-  else if (input.includes("草地")) shape = "grass";
-  else if (input.includes("天空")) shape = "sky";
+  const shape = parseShape(input);
 
-  if (isMove) return { action: "move", shape, position: input, target: input };
-  if (isResize) return { action: "resize", shape, size: input, target: input };
+  if (isMove) return { action: "move", shape, position: input, ordinal: parseOrdinal(input), target: input };
+  if (isResize) return { action: "resize", shape, size: input, ordinal: parseOrdinal(input), target: input };
+
+  /* 默认 draw：必须包含绘图动词，否则是拆分碎片，忽略 */
+  if (!/画|绘制|添加|创建|生成/.test(input)) {
+    return null;
+  }
 
   return {
     action: "draw",
@@ -261,6 +416,7 @@ function parseOneCommand(input: string): Command {
     color: getColor(input),
     position: input,
     size: input,
+    length: shape === "line" ? parseLength(input) : undefined,
     text: input.match(/写(.+)/)?.[1]?.trim(),
   };
 }
@@ -278,6 +434,23 @@ function splitComplexCommand(input: string): string[] {
 }
 
 function createDrawable(command: Command): Drawable {
+  /* dot 固定小尺寸 */
+  if (command.shape === "dot") {
+    const pos =
+      command.x != null && command.y != null
+        ? { x: command.x, y: command.y }
+        : getPosition(command.position ?? "");
+    return {
+      id: uuid(),
+      type: "dot",
+      x: pos.x,
+      y: pos.y,
+      width: 12,
+      height: 12,
+      color: command.color ?? "#111827",
+    };
+  }
+
   /* LLM 可能直接给出精确数值 */
   const size =
     command.width && command.height
@@ -288,6 +461,21 @@ function createDrawable(command: Command): Drawable {
       ? { x: command.x, y: command.y }
       : getPosition(command.position ?? "");
   const type = command.shape ?? "circle";
+
+  /* 线条可指定长度 */
+  if (type === "line" && command.length) {
+    return {
+      id: uuid(),
+      type: "line",
+      x: pos.x,
+      y: pos.y,
+      x2: pos.x + command.length,
+      y2: pos.y,
+      width: command.length,
+      height: 6,
+      color: command.color ?? "#111827",
+    };
+  }
 
   if (type === "sky") {
     return {
@@ -327,13 +515,55 @@ function createDrawable(command: Command): Drawable {
 
 function findTargetIndex(shapes: Drawable[], command: Command): number {
   if (shapes.length === 0) return -1;
-  if (command.shape) {
-    for (let i = shapes.length - 1; i >= 0; i--) {
-      if (shapes[i].type === command.shape || (command.shape === "sun" && shapes[i].type === "circle"))
-        return i;
+
+  /* 先找出所有匹配的图形索引 */
+  const matches: number[] = [];
+  for (let i = 0; i < shapes.length; i++) {
+    const s = shapes[i];
+    let typeMatch = !command.shape || s.type === command.shape ||
+      (command.shape === "sun" && s.type === "circle") ||
+      (command.shape === "circle" && s.type === "sun");
+    /* 颜色筛选（可选） */
+    let colorMatch = true;
+    if (command.color) {
+      /* 用 target 字段中的颜色或直接匹配 */
+      const cmdColor = command.color;
+      const targetColor = (command.target ? getColor(command.target) : undefined) ?? "";
+      const tgt = command.target ?? "";
+      colorMatch = s.color === cmdColor || s.color === targetColor ||
+        (tgt.includes("蓝") && s.color === "#3b82f6") ||
+        (tgt.includes("红") && s.color === "#ef4444") ||
+        (tgt.includes("绿") && s.color === "#22c55e") ||
+        (tgt.includes("黄") && s.color === "#facc15");
+    }
+    if (typeMatch && colorMatch) matches.push(i);
+  }
+
+  if (matches.length === 0) {
+    /* 没有精确匹配，退回到只要类型匹配即可 */
+    for (let i = 0; i < shapes.length; i++) {
+      if (!command.shape || shapes[i].type === command.shape) matches.push(i);
     }
   }
-  return shapes.length - 1;
+
+  if (matches.length === 0) return -1;
+
+  const ordinal = command.ordinal;
+  if (ordinal != null) {
+    if (ordinal > 0) {
+      /* 正数 = 第N个 (1-based) */
+      const idx = ordinal - 1;
+      return idx < matches.length ? matches[idx] : matches[matches.length - 1];
+    }
+    if (ordinal < 0) {
+      /* 负数 = 倒数第N个 (-1=最后一个, -2=倒数第二个) */
+      const idx = matches.length + ordinal; /* -1 → last, -2 → second-last */
+      return idx >= 0 ? matches[idx] : matches[0];
+    }
+  }
+
+  /* 默认：最后一个匹配 */
+  return matches[matches.length - 1];
 }
 
 /* ── render ────────────────────────────────────────────── */
@@ -369,15 +599,19 @@ function renderShape(s: Drawable) {
   }
 
   if (s.type === "line") {
+    const x1 = s.x;
+    const y1 = s.y;
+    const x2 = s.x2 ?? s.x + s.width;
+    const y2 = s.y2 ?? s.y;
     return (
       <line
         key={s.id}
-        x1={s.x - s.width / 2}
-        y1={s.y}
-        x2={s.x + s.width / 2}
-        y2={s.y}
+        x1={x1}
+        y1={y1}
+        x2={x2}
+        y2={y2}
         stroke={s.color}
-        strokeWidth="8"
+        strokeWidth="6"
         strokeLinecap="round"
       />
     );
@@ -390,6 +624,10 @@ function renderShape(s: Drawable) {
         <circle cx={s.x} cy={s.y} r={s.width / 2} fill={s.color} stroke="#14532d" strokeWidth="2" />
       </g>
     );
+  }
+
+  if (s.type === "dot") {
+    return <circle key={s.id} cx={s.x} cy={s.y} r={8} fill={s.color} stroke="#111827" strokeWidth="2" />;
   }
 
   if (s.type === "text") {
@@ -481,7 +719,9 @@ async function testLLMConnection(config: LLMConfig): Promise<string> {
 function App() {
   const [shapes, setShapes] = useState<Drawable[]>([]);
   const [listening, setListening] = useState(false);
-  const [lastText, setLastText] = useState("点击「开始语音」，然后说：画一个红色圆形");
+  const [lastText, setLastText] = useState("输入指令后按回车，例如：画一个红色圆形");
+  const [textInput, setTextInput] = useState("");
+  const [speechAvailable, setSpeechAvailable] = useState(true);
   const recognitionRef = useRef<any>(null);
 
   /* ---- LLM config ---- */
@@ -514,7 +754,36 @@ function App() {
         return index < 0 ? prev : prev.filter((_, i) => i !== index);
       }
 
-      if (command.action === "draw") return [...prev, createDrawable(command)];
+      if (command.action === "draw") {
+        /* useLineRadius: 以上一条线的长度为半径画圆 */
+        if (command.useLineRadius) {
+          let lastLine: Drawable | null = null;
+          for (let i = prev.length - 1; i >= 0; i--) {
+            if (prev[i].type === "line") { lastLine = prev[i]; break; }
+          }
+          if (lastLine) {
+            const radius = getLineLength(lastLine);
+            const circle: Drawable = {
+              id: uuid(),
+              type: "circle",
+              x: lastLine.x,
+              y: lastLine.y,
+              width: radius * 2,
+              height: radius * 2,
+              color: command.color ?? "#3b82f6",
+            };
+            return [...prev, circle];
+          }
+          /* 找不到线时退回到普通画圆 */
+          return [...prev, createDrawable(command)];
+        }
+        /* useRef: 以上一个图形的位置为基准 */
+        if (command.useRef && prev.length > 0) {
+          const ref = prev[prev.length - 1];
+          return [...prev, createDrawable({ ...command, x: ref.x, y: ref.y })];
+        }
+        return [...prev, createDrawable(command)];
+      }
 
       if (command.action === "move") {
         const index = findTargetIndex(prev, command);
@@ -542,6 +811,44 @@ function App() {
         );
       }
 
+      if (command.action === "recolor") {
+        const newColor = command.color;
+        if (!newColor) return prev;
+        const index = findTargetIndex(prev, command);
+        if (index < 0) return prev;
+        return prev.map((s, i) => (i === index ? { ...s, color: newColor } : s));
+      }
+
+      if (command.action === "extend") {
+        if (prev.length === 0) return prev;
+        const refIdx = findTargetIndex(prev, command);
+        const ref = refIdx >= 0 ? prev[refIdx] : prev[prev.length - 1];
+        const len = command.length ?? 150;
+        const dirMap: Record<string, { dx: number; dy: number }> = {
+          left:        { dx: -len, dy: 0 },
+          right:       { dx:  len, dy: 0 },
+          up:          { dx: 0,    dy: -len },
+          down:        { dx: 0,    dy:  len },
+          "up-left":   { dx: -106, dy: -106 },
+          "up-right":  { dx:  106, dy: -106 },
+          "down-left": { dx: -106, dy:  106 },
+          "down-right":{ dx:  106, dy:  106 },
+        };
+        const d = dirMap[command.direction ?? "right"] ?? dirMap.right;
+        const line: Drawable = {
+          id: uuid(),
+          type: "line",
+          x: ref.x,
+          y: ref.y,
+          x2: ref.x + d.dx,
+          y2: ref.y + d.dy,
+          width: 8,
+          height: 8,
+          color: command.color ?? "#111827",
+        };
+        return [...prev, line];
+      }
+
       return prev;
     });
   }
@@ -556,9 +863,12 @@ function App() {
       setLlmStatus("");
       try {
         const commands = await callLLM(text, llmConfig);
+        const summary = commands.map((c) => `${c.action} ${c.shape ?? ""}`).join(" | ");
+        console.log("LLM解析指令:", commands, summary);
         commands.forEach(applyCommand);
         speak(`大模型已执行 ${commands.length} 个指令`);
         setLlmStatus("大模型解析成功");
+        setLastText(`${text}\n→ [LLM] ${summary}`);
       } catch (e: any) {
         console.error("LLM error:", e);
         speak("大模型调用失败，已回退到本地解析");
@@ -577,9 +887,21 @@ function App() {
 
   function fallbackLocal(text: string) {
     const parts = splitComplexCommand(text);
-    const commands = parts.map(parseOneCommand);
+    const commands = parts.map(parseOneCommand).filter((c): c is Command => c !== null);
+    /* 输出解析结果帮助调试 */
+    const summary = commands.map((c) => `${c.action} ${c.shape ?? ""} ${c.color ?? ""}`).join(" | ");
+    console.log("解析指令:", commands, summary);
     commands.forEach(applyCommand);
-    speak(`已执行 ${commands.length} 个指令`);
+    if (commands.length === 1 && commands[0].action === "move") {
+      speak(`已将图形移动到目标位置`);
+    } else if (commands.length === 1 && commands[0].action === "delete") {
+      speak(`已删除图形`);
+    } else if (commands.length === 1 && commands[0].action === "recolor") {
+      speak(`已修改颜色`);
+    } else {
+      speak(`已执行 ${commands.length} 个指令`);
+    }
+    setLastText(`${text}\n→ ${summary}`);
   }
 
   function startListening() {
@@ -597,9 +919,23 @@ function App() {
 
     recognition.onstart = () => setListening(true);
     recognition.onend = () => setListening(false);
-    recognition.onerror = () => {
+    recognition.onerror = (event: any) => {
       setListening(false);
-      speak("没有听清楚，请再说一次");
+      const err = event.error || "";
+      if (err === "network") {
+        setSpeechAvailable(false);
+        setLastText("⚠️ 语音服务不可用（需访问 Google）。请使用文字输入框。");
+        speak("");
+      } else if (err === "not-allowed" || err === "audio-capture") {
+        setLastText("⚠️ 麦克风权限未开启，请在浏览器设置中允许访问麦克风。");
+        speak("请开启麦克风权限");
+      } else if (err === "no-speech") {
+        setLastText("未检测到语音，请再说一次。");
+        speak("没有听清楚，请再说一次");
+      } else {
+        setLastText(`语音识别失败：${err || "未知错误"}。可使用文字输入。`);
+        speak("没有听清楚，请再说一次");
+      }
     };
     recognition.onresult = (event: any) => {
       const text = event.results[0][0].transcript;
@@ -633,9 +969,44 @@ function App() {
         <h1>AI 语音绘图工具</h1>
         <p>仅通过语音完成绘图、修改、撤销和清空。</p>
 
-        <button onClick={startListening} className={listening ? "danger" : ""}>
-          {listening ? "正在聆听..." : llmLoading ? "大模型处理中..." : "开始语音"}
-        </button>
+        {speechAvailable && (
+          <button onClick={startListening} className={listening ? "danger" : ""}>
+            {listening ? "正在聆听..." : llmLoading ? "大模型处理中..." : "🎤 开始语音"}
+          </button>
+        )}
+
+        {/* 文字输入（语音不可用时为主输入） */}
+        <div className="text-input-row">
+          <input
+            type="text"
+            value={textInput}
+            placeholder={speechAvailable ? "或直接输入指令，按 Enter 发送..." : "输入绘图指令，按 Enter 发送..."}
+            onChange={(e) => setTextInput(e.target.value)}
+            onKeyDown={(e) => {
+              if (e.key === "Enter" && textInput.trim()) {
+                handleText(textInput.trim());
+                setTextInput("");
+              }
+            }}
+            autoFocus={!speechAvailable}
+          />
+          <button
+            className="small"
+            onClick={() => {
+              if (textInput.trim()) {
+                handleText(textInput.trim());
+                setTextInput("");
+              }
+            }}
+            disabled={!textInput.trim()}
+          >
+            发送
+          </button>
+        </div>
+
+        {!speechAvailable && (
+          <p className="speech-warning">⚠️ 语音服务不可用 — Google 服务在国内被墙，请使用文字输入</p>
+        )}
 
         <button onClick={() => handleText("撤销")} className="secondary">
           撤销
@@ -653,9 +1024,13 @@ function App() {
           <b>可说指令：</b>
           <p>画一个红色圆形</p>
           <p>在右上角画一个黄色太阳</p>
+          <p>删掉第一个圆</p>
+          <p>画一条长度200的线，然后以这条线为半径画圆</p>
+          <p>画一个点，然后向右延伸一条线</p>
+          <p>以这个点为圆心画一个圆</p>
           <p>画蓝色天空和绿色草地</p>
           <p>把太阳移动到左上角</p>
-          <p>把刚才的圆变大</p>
+          <p>将蓝色的圆改为黄色</p>
           <p>撤销 / 清空画布</p>
         </div>
 
